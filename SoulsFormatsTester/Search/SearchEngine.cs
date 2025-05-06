@@ -7,6 +7,8 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
+using System.Linq;
+using System.Reflection.PortableExecutable;
 using System.Runtime.CompilerServices;
 using System.Text;
 
@@ -213,6 +215,37 @@ namespace SoulsFormatsTester.Search
                 }
 
                 index++;
+            }
+        }
+
+        private void SearchBHD5(string name, string container, BHD5 header, Stream dataStream)
+        {
+            bool TryGetSplitFile(string name, string format, [NotNullWhen(true)] out SearchData? data)
+            {
+                // Not supported due to hashing for now
+                data = null;
+                return false;
+            }
+
+            IEnumerable<BHD5.FileHeader> EnumerableFileHeaders()
+            {
+                foreach (var bucket in header.Buckets)
+                {
+                    foreach (var file in bucket)
+                    {
+                        yield return file;
+                    }
+                }
+            }
+
+            var sortedFileHeaders = EnumerableFileHeaders().OrderBy(f => f.FileOffset).ToList();
+            foreach (var file in sortedFileHeaders)
+            {
+                string fileContainer = CombineContainer(container, name);
+                int size = header.Format >= BHD5.Game.DarkSouls3 ? (int)file.UnpaddedFileSize : file.PaddedFileSize;
+                var data = SearchBytesInternal(file.FileNameHash.ToString(), fileContainer, dataStream.GetBytes(file.FileOffset, size));
+                SearchFeedbackFormat(data, TryGetSplitFile);
+                OnSearch?.Invoke(this, new SearchDataEventArgs(data));
             }
         }
 
@@ -470,14 +503,15 @@ namespace SoulsFormatsTester.Search
                     FoundSplitFiles.Add(data.Name);
                     break;
                 case "BHD5":
-                    // Searching not supported
-                    if (tryGetSplitFile(GetBdtName(data.Name), "BHD5", out SearchData? bhd5Data))
+                    if (tryGetSplitFile(GetBdtName(data.Name), "BHD5", out SearchData? bhd5Data) ||
+                        tryGetSplitFile(GetBdtName(GetBhd5DataName(data.Name)), "BHD5", out bhd5Data))
                     {
-                        OnSearch?.Invoke(this, new SearchDataEventArgs(bhd5Data));
-                        FoundSplitFiles.Add(bhd5Data.Name);
-                    }
-                    else if (tryGetSplitFile(GetBdtName(GetBhd5DataName(data.Name)), "BHD5", out bhd5Data))
-                    {
+                        if (TryReadBHD5(data, out BHD5? bhd))
+                        {
+                            SearchBHD5(data.Name, data.Container, bhd, GetStream(bhd5Data));
+                            ResetStream(bhd5Data);
+                        }
+
                         OnSearch?.Invoke(this, new SearchDataEventArgs(bhd5Data));
                         FoundSplitFiles.Add(bhd5Data.Name);
                     }
@@ -650,6 +684,10 @@ namespace SoulsFormatsTester.Search
             }
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static Stream GetStream(SearchData data)
+            => data.Stream != null ? data.Stream : data.Bytes != null ? new MemoryStream(data.Bytes): throw new Exception($"{nameof(SearchData)} had no source data.");
+
         private static BND2Reader ReadBND2(SearchData data)
         {
             if (data.Bytes != null)
@@ -783,6 +821,31 @@ namespace SoulsFormatsTester.Search
             {
                 throw new Exception($"A {nameof(SearchData)} had no source data.");
             }
+        }
+
+        private static bool TryReadBHD5(SearchData data, [NotNullWhen(true)] out BHD5? bhd)
+        {
+            if (data.Bytes != null)
+            {
+                try { bhd = BHD5.Read(data.Bytes, BHD5.Game.DarkSouls1); return true; } catch { }
+                try { bhd = BHD5.Read(data.Bytes, BHD5.Game.DarkSouls2); return true; } catch { }
+                try { bhd = BHD5.Read(data.Bytes, BHD5.Game.DarkSouls3); return true; } catch { }
+                try { bhd = BHD5.Read(data.Bytes, BHD5.Game.EldenRing); return true; } catch { }
+            }
+            else if (data.Stream != null)
+            {
+                try { bhd = BHD5.Read(data.Stream, BHD5.Game.DarkSouls1); return true; } catch { }
+                try { bhd = BHD5.Read(data.Stream, BHD5.Game.DarkSouls2); return true; } catch { }
+                try { bhd = BHD5.Read(data.Stream, BHD5.Game.DarkSouls3); return true; } catch { }
+                try { bhd = BHD5.Read(data.Stream, BHD5.Game.EldenRing); return true; } catch { }
+            }
+            else
+            {
+                throw new Exception($"{nameof(SearchData)} had no source data.");
+            }
+
+            bhd = null;
+            return false;
         }
 
         private static MGF ReadMGF(SearchData data)
