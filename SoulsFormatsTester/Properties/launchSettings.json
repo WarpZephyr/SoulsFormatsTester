@@ -1,8 +1,0 @@
-{
-  "profiles": {
-    "SoulsFormatsTester": {
-      "commandName": "Project",
-      "commandLineArgs": "\"C:\\Program Files (x86)\\Steam\\steamapps\\common\\ARMORED CORE VI FIRES OF RUBICON\\Game\\chr\"\r\n\r\n\r\n"
-    }
-  }
-}
